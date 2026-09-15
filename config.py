@@ -726,7 +726,7 @@ def get_host() -> str:
 def get_chunk_size() -> int:
     """Returns the chunk size for splitting long text into chunks for better quality."""
     return config_manager.get_int(
-        "server.chunk_size", _get_default_from_structure("server.chunk_size")
+        "generation_defaults.chunk_size", _get_default_from_structure("generation_defaults.chunk_size")
     )
 
 def get_port() -> int:
