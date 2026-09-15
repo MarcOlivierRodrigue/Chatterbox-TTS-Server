@@ -25,6 +25,7 @@ generation_defaults:
   seed: 0
   speed_factor: 1.0
   language: en
+  chunk_size: 120
 audio_output:
   format: wav
   sample_rate: 24000

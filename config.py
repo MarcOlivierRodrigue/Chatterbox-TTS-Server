@@ -79,6 +79,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "seed": 0,  # Random seed for generation. 0 often means random or engine default.
         "speed_factor": 1.0,  # Controls the speed of the generated speech.
         "language": "en",  # Default language for TTS.
+        "chunk_size": 120, # Split long text into chunks for better quality
     },
     "audio_output": {  # Settings related to the format of generated audio.
         "format": "wav",  # Output audio format (e.g., 'wav', 'mp3').
@@ -722,6 +723,11 @@ def get_host() -> str:
         "server.host", _get_default_from_structure("server.host")
     )
 
+def get_chunk_size() -> int:
+    """Returns the chunk size for splitting long text into chunks for better quality."""
+    return config_manager.get_int(
+        "server.chunk_size", _get_default_from_structure("server.chunk_size")
+    )
 
 def get_port() -> int:
     """Returns the server port number."""
