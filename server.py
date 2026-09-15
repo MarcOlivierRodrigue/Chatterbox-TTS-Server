@@ -60,6 +60,7 @@ from config import (
     get_audio_sample_rate,
     get_full_config_for_template,
     get_audio_output_format,
+    get_chunk_size,
 )
 
 import engine  # TTS Engine interface
@@ -1424,7 +1425,7 @@ async def openai_speech_endpoint(request: OpenAISpeechRequest):
         )
 
         # Split long text into chunks for better quality (same as /tts endpoint)
-        DEFAULT_CHUNK_SIZE = config_manager.get_chunk_size()
+        DEFAULT_CHUNK_SIZE = get_chunk_size()
         text_chunks = utils.chunk_text_by_sentences(request.input_, DEFAULT_CHUNK_SIZE)
         if not text_chunks:
             raise HTTPException(
