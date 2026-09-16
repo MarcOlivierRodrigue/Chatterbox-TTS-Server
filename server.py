@@ -1538,7 +1538,7 @@ async def openai_speech_endpoint(request: OpenAISpeechRequest):
                     status_code=500, detail=f"Failed to save audio file: {e}"
                 )
 
-        return StreamingResponse(io.BytesIO(encoded_audio), media_type=media_type)
+        return Response(ontent=encoded_audio, media_type=media_type)
 
     except Exception as e:
         logger.error(f"Error in openai_speech_endpoint: {e}", exc_info=True)
