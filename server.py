@@ -34,7 +34,6 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     StreamingResponse,
-    Response,
     FileResponse
 )
 from fastapi.staticfiles import StaticFiles
@@ -1539,7 +1538,7 @@ async def openai_speech_endpoint(request: OpenAISpeechRequest):
                     status_code=500, detail=f"Failed to save audio file: {e}"
                 )
 
-        return Response(content=encoded_audio, media_type=media_type)
+        return encoded_audio
 
     except Exception as e:
         logger.error(f"Error in openai_speech_endpoint: {e}", exc_info=True)
