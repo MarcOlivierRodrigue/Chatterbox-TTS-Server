@@ -74,6 +74,7 @@ import utils  # Utility functions
 
 from pydantic import BaseModel, Field
 
+request_lock = asyncio.Lock()
 
 class OpenAISpeechRequest(BaseModel):
     model: str
@@ -1440,106 +1441,108 @@ async def openai_speech_endpoint(request: OpenAISpeechRequest):
         all_audio_segments_np: List[np.ndarray] = []
         engine_sr: Optional[int] = None
 
-        for i, chunk_text in enumerate(text_chunks):
-            chunk_seed = seed_to_use + i if seed_to_use is not None and seed_to_use >= 0 else seed_to_use
+        async with request_lock:
 
-            audio_tensor, sr = engine.synthesize(
-                text=chunk_text,
-                audio_prompt_path=str(audio_prompt_path),
-                temperature=get_gen_default_temperature(),
-                exaggeration=get_gen_default_exaggeration(),
-                cfg_weight=get_gen_default_cfg_weight(),
-                seed=chunk_seed,
-                language=request.language or get_gen_default_language(),
-            )
+            for i, chunk_text in enumerate(text_chunks):
+                chunk_seed = seed_to_use + i if seed_to_use is not None and seed_to_use >= 0 else seed_to_use
 
-            if audio_tensor is None or sr is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"TTS engine failed to synthesize audio for chunk {i+1}.",
+                audio_tensor, sr = engine.synthesize(
+                    text=chunk_text,
+                    audio_prompt_path=str(audio_prompt_path),
+                    temperature=get_gen_default_temperature(),
+                    exaggeration=get_gen_default_exaggeration(),
+                    cfg_weight=get_gen_default_cfg_weight(),
+                    seed=chunk_seed,
+                    language=request.language or get_gen_default_language(),
                 )
 
-            if engine_sr is None:
-                engine_sr = sr
-
-            if request.speed != 1.0:
-                audio_tensor, _ = utils.apply_speed_factor(audio_tensor, sr, request.speed)
-
-            chunk_np = audio_tensor.cpu().numpy().squeeze().astype(np.float32)
-            all_audio_segments_np.append(chunk_np)
-
-        # Stitch chunks together with crossfading
-        if len(all_audio_segments_np) == 1:
-            final_audio_np = all_audio_segments_np[0]
-        else:
-            CROSSFADE_MS = 20
-            SENTENCE_PAUSE_MS = 200
-            fade_samples = int(CROSSFADE_MS / 1000 * engine_sr)
-            silence_buffer_samples = int(SENTENCE_PAUSE_MS / 1000 * engine_sr) + (fade_samples * 2)
-
-            result = all_audio_segments_np[0].astype(np.float32)
-            for seg in all_audio_segments_np[1:]:
-                seg = seg.astype(np.float32)
-                silence = np.zeros(silence_buffer_samples, dtype=np.float32)
-                result = _crossfade_with_overlap(result, silence, fade_samples)
-                result = _crossfade_with_overlap(result, seg, fade_samples)
-            final_audio_np = result
-            logger.info(
-                f"OpenAI speech: stitched {len(all_audio_segments_np)} chunks with {CROSSFADE_MS}ms crossfades"
-            )
-
-        # Normalize to prevent clipping
-        peak = np.abs(final_audio_np).max()
-        if peak > 0.99:
-            final_audio_np = final_audio_np * (0.95 / peak)
-
-        encoded_audio = utils.encode_audio(
-            audio_array=final_audio_np,
-            sample_rate=engine_sr,
-            output_format=request.response_format,
-            target_sample_rate=get_audio_sample_rate(),
-        )
-
-        if encoded_audio is None:
-            raise HTTPException(status_code=500, detail="Failed to encode audio.")
-
-        media_type = f"audio/{request.response_format}"
-
-        # Optional: Save to disk if enabled
-        if config_manager.get_bool("audio_output.save_to_disk", False):
-            output_dir = get_output_path(ensure_absolute=True)
-            timestamp_str = time.strftime("%Y%m%d_%H%M%S")
-            download_filename = f"openai_tts_{timestamp_str}.{request.response_format}"
-            output_file_path = output_dir / download_filename
-            try:
-                output_dir.mkdir(parents=True, exist_ok=True)
-                with open(output_file_path, "wb") as f:
-                    f.write(encoded_audio)
-                if (
-                    not output_file_path.exists()
-                    or output_file_path.stat().st_size < 100
-                ):
-                    logger.error(
-                        f"File save verification failed for {output_file_path}"
-                    )
+                if audio_tensor is None or sr is None:
                     raise HTTPException(
                         status_code=500,
-                        detail=f"Failed to save audio file to {output_file_path}",
+                        detail=f"TTS engine failed to synthesize audio for chunk {i+1}.",
                     )
+
+                if engine_sr is None:
+                    engine_sr = sr
+
+                if request.speed != 1.0:
+                    audio_tensor, _ = utils.apply_speed_factor(audio_tensor, sr, request.speed)
+
+                chunk_np = audio_tensor.cpu().numpy().squeeze().astype(np.float32)
+                all_audio_segments_np.append(chunk_np)
+
+            # Stitch chunks together with crossfading
+            if len(all_audio_segments_np) == 1:
+                final_audio_np = all_audio_segments_np[0]
+            else:
+                CROSSFADE_MS = 20
+                SENTENCE_PAUSE_MS = 200
+                fade_samples = int(CROSSFADE_MS / 1000 * engine_sr)
+                silence_buffer_samples = int(SENTENCE_PAUSE_MS / 1000 * engine_sr) + (fade_samples * 2)
+
+                result = all_audio_segments_np[0].astype(np.float32)
+                for seg in all_audio_segments_np[1:]:
+                    seg = seg.astype(np.float32)
+                    silence = np.zeros(silence_buffer_samples, dtype=np.float32)
+                    result = _crossfade_with_overlap(result, silence, fade_samples)
+                    result = _crossfade_with_overlap(result, seg, fade_samples)
+                final_audio_np = result
                 logger.info(
-                    f"OpenAI-compatible audio saved to disk: {output_file_path}"
-                )
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(
-                    f"Failed to save audio to {output_file_path}: {e}", exc_info=True
-                )
-                raise HTTPException(
-                    status_code=500, detail=f"Failed to save audio file: {e}"
+                    f"OpenAI speech: stitched {len(all_audio_segments_np)} chunks with {CROSSFADE_MS}ms crossfades"
                 )
 
-        return Response(content=encoded_audio, media_type=media_type)
+            # Normalize to prevent clipping
+            peak = np.abs(final_audio_np).max()
+            if peak > 0.99:
+                final_audio_np = final_audio_np * (0.95 / peak)
+
+            encoded_audio = utils.encode_audio(
+                audio_array=final_audio_np,
+                sample_rate=engine_sr,
+                output_format=request.response_format,
+                target_sample_rate=get_audio_sample_rate(),
+            )
+
+            if encoded_audio is None:
+                raise HTTPException(status_code=500, detail="Failed to encode audio.")
+
+            media_type = f"audio/{request.response_format}"
+
+            # Optional: Save to disk if enabled
+            if config_manager.get_bool("audio_output.save_to_disk", False):
+                output_dir = get_output_path(ensure_absolute=True)
+                timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+                download_filename = f"openai_tts_{timestamp_str}.{request.response_format}"
+                output_file_path = output_dir / download_filename
+                try:
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    with open(output_file_path, "wb") as f:
+                        f.write(encoded_audio)
+                    if (
+                        not output_file_path.exists()
+                        or output_file_path.stat().st_size < 100
+                    ):
+                        logger.error(
+                            f"File save verification failed for {output_file_path}"
+                        )
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"Failed to save audio file to {output_file_path}",
+                        )
+                    logger.info(
+                        f"OpenAI-compatible audio saved to disk: {output_file_path}"
+                    )
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    logger.error(
+                        f"Failed to save audio to {output_file_path}: {e}", exc_info=True
+                    )
+                    raise HTTPException(
+                        status_code=500, detail=f"Failed to save audio file: {e}"
+                    )
+
+            return Response(content=encoded_audio, media_type=media_type)
 
     except Exception as e:
         logger.error(f"Error in openai_speech_endpoint: {e}", exc_info=True)
