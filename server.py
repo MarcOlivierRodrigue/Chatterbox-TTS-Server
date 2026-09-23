@@ -6,6 +6,7 @@
 import os
 import io
 import asyncio
+import threading
 import struct
 import logging
 import logging.handlers  # For RotatingFileHandler
@@ -34,7 +35,6 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     StreamingResponse,
-    Response,
     FileResponse
 )
 from fastapi.staticfiles import StaticFiles
@@ -74,7 +74,7 @@ import utils  # Utility functions
 
 from pydantic import BaseModel, Field
 
-request_lock = asyncio.Lock()
+request_lock = threading.Lock()
 
 class OpenAISpeechRequest(BaseModel):
     model: str
@@ -1395,7 +1395,7 @@ async def openai_voices_endpoint(model: str = ""):
         )
 
 @app.post("/v1/audio/speech", tags=["OpenAI Compatible"])
-async def openai_speech_endpoint(request: OpenAISpeechRequest):
+def openai_speech_endpoint(request: OpenAISpeechRequest):
     # Determine the audio prompt path based on the voice parameter
     predefined_voices_path = get_predefined_voices_path(ensure_absolute=True)
     reference_audio_path = get_reference_audio_path(ensure_absolute=True)
@@ -1441,7 +1441,7 @@ async def openai_speech_endpoint(request: OpenAISpeechRequest):
         all_audio_segments_np: List[np.ndarray] = []
         engine_sr: Optional[int] = None
 
-        async with request_lock:
+        with request_lock:
 
             for i, chunk_text in enumerate(text_chunks):
                 chunk_seed = seed_to_use + i if seed_to_use is not None and seed_to_use >= 0 else seed_to_use
@@ -1542,7 +1542,7 @@ async def openai_speech_endpoint(request: OpenAISpeechRequest):
                         status_code=500, detail=f"Failed to save audio file: {e}"
                     )
 
-            return Response(content=encoded_audio, media_type=media_type)
+        return StreamingResponse(io.BytesIO(encoded_audio), media_type=media_type)
 
     except Exception as e:
         logger.error(f"Error in openai_speech_endpoint: {e}", exc_info=True)
